@@ -2,7 +2,9 @@ name: Deploy TRALIX EDITOR to GitHub Pages
 
 on:
   push:
-    branches: [arena/01a0e387-tralil-ai]
+    branches:
+      - arena/01a0e387-tralil-ai
+      - main
   workflow_dispatch:
 
 permissions:
