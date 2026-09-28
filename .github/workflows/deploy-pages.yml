@@ -27,7 +27,7 @@ jobs:
       - name: Enable & configure Pages
         uses: actions/configure-pages@v5
         with:
-          enable_pages: true
+          enablement: true
 
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
