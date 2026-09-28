@@ -33,7 +33,7 @@ export function newProject(opts = {}) {
 export function clipDuration(c) {
   switch (c.kind) {
     case 'video': case 'audio': return Math.max(0.04, (c.out - c.in) / (c.speed || 1));
-    case 'still': case 'text': case 'overlay': return Math.max(0.1, c.duration);
+    case 'still': case 'text': case 'overlay': case 'ovl': return Math.max(0.1, c.duration);
     default: return 0;
   }
 }
@@ -69,6 +69,8 @@ export function makeVideoClip(media, start, inPoint = 0, outPoint = null) {
     adj: DEFAULT_ADJ(),
     effects: [],
     fadeIn: 0, fadeOut: 0,
+    reverse: false,
+    anim: { in: 'none', out: 'none', dur: 0.4 },
   };
 }
 export function makeAudioClip(media, start, inPoint = 0, outPoint = null) {
@@ -90,6 +92,7 @@ export function makeTextClip(start, duration = 3, text = 'YOUR TEXT') {
     letterSpacing: 2, lineHeight: 1.15,
     align: 'center',
     color: '#ffffff',
+    opacity: 1,
     outline: { w: 0, color: '#000000' },
     shadow: { blur: 0, color: '#000000', x: 0, y: 2 },
     glow: { on: false, color: '#00e5ff', strength: 1 },
@@ -100,6 +103,24 @@ export function makeTextClip(start, duration = 3, text = 'YOUR TEXT') {
 }
 export function makeOverlayClip(sub, start, duration = 4, p = {}) {
   return { id: uid(), kind: 'overlay', sub, start, duration, p: { ...p } };
+}
+/* media overlay: image or video layered above the base video */
+export function makeOverlayMediaClip(media, start, duration = null) {
+  const dur = duration ?? (media.kind === 'video' ? Math.min(media.duration || 4, 15) : 4);
+  return {
+    id: uid(), kind: 'ovl', mediaId: media.id,
+    start, duration: Math.max(0.2, dur),
+    scale: 1, x: 0, y: 0, rotation: 0, flipH: false, flipV: false,
+    opacity: 1,
+    crop: { l: 0, t: 0, r: 0, b: 0 },
+    adj: DEFAULT_ADJ(),
+    effects: [],
+    fadeIn: 0, fadeOut: 0, speed: 1,
+    volume: 0, muted: true,
+    contain: true,
+    reverse: false,
+    anim: { in: 'fade', out: 'fade', dur: 0.3 },
+  };
 }
 export function makeStillClip(dataURL, start, duration = 1) {
   return {

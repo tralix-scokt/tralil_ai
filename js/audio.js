@@ -4,6 +4,24 @@ import { mediaMap, peekAudioBuffer, getAudioBuffer, audioCtx } from './media.js'
 import { clipDuration, clipsSorted } from './model.js';
 import { clamp } from './util.js';
 
+const revBufCache = new Map(); // mediaId -> reversed AudioBuffer
+
+async function getReversedBuffer(media) {
+  if (revBufCache.has(media.id)) return revBufCache.get(media.id);
+  const buf = await getAudioBuffer(media);
+  if (!buf) return null;
+  const ctx = audioCtx();
+  const rev = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+    const srcCh = buf.getChannelData(ch);
+    const dstCh = rev.getChannelData(ch);
+    const n = srcCh.length;
+    for (let i = 0; i < n; i++) dstCh[i] = srcCh[n - 1 - i];
+  }
+  revBufCache.set(media.id, rev);
+  return rev;
+}
+
 class AudioEngine {
   constructor() {
     this.voices = [];
@@ -53,6 +71,13 @@ class AudioEngine {
         if (track.kind === 'audio' && clip.kind !== 'audio' && clip.kind !== 'video') continue;
         const media = mediaMap.get(clip.mediaId);
         if (!media) continue;
+        if (clip.reverse) {
+          // reversed playback needs a reversed AudioBuffer (built lazily)
+          const cached = revBufCache.get(media.id);
+          if (cached) jobs.push({ clip, buf: cached });
+          else jobs.push({ clip, buf: null, media, reversed: true });
+          continue;
+        }
         const buf = peekAudioBuffer(media.id);
         if (buf) jobs.push({ clip, buf });
         else jobs.push({ clip, buf: null, media });
@@ -61,8 +86,9 @@ class AudioEngine {
     for (const job of jobs) {
       if (job.buf) this.startVoice(job.clip, job.buf, fromT, anchor2);
       else {
-        // decode lazily, then join playback if it's still the same playback session
-        getAudioBuffer(job.media).then(buf => {
+        // decode (and optionally reverse) lazily, then join playback if it's still the same session
+        const build = job.reversed ? getReversedBuffer(job.media) : getAudioBuffer(job.media);
+        build.then(buf => {
           if (!buf) return;
           if (this._token === token && this.playing) this.startVoice(job.clip, buf, this.currentFrom, this.currentAnchor);
         }).catch(() => { });

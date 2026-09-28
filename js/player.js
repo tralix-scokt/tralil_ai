@@ -102,32 +102,43 @@ export class Player {
     this._raf = requestAnimationFrame(this._loop);
   };
 
-  /* keep every clip's <video> element on the right source frame */
+  /* keep every clip's <video> element on the right source frame (video tracks + media overlays) */
   syncVideoEls(t, collect = null) {
     const p = this.getProject();
     if (!p) return;
     const wanted = new Map(); // clipId -> {clip, media, desired}
     for (const track of p.tracks) {
-      if (track.kind !== 'video' || track.hidden) continue;
+      const isVideoTrack = track.kind === 'video';
+      const isOverlayTrack = track.kind === 'overlay';
+      if (track.hidden || (!isVideoTrack && !isOverlayTrack)) continue;
       const clips = clipsSorted(track);
       for (let i = 0; i < clips.length; i++) {
         const c = clips[i];
+        if (isVideoTrack && !(c.kind === 'video' || c.kind === 'still')) continue;
+        if (isOverlayTrack && c.kind !== 'ovl') continue;
+        if (c.kind === 'still') continue;
         const d = clipDuration(c);
         const start = c.start, end = c.start + d;
         const media = mediaMap.get(c.mediaId);
-        if (!media) continue;
-        // active normally, or during a transition window touching this boundary
+        if (!media || media.kind !== 'video') continue;
         const tr = track.transitions[c.id];
         const nb = clips[i + 1];
         let near = t >= start - 0.01 && t < end + 0.01;
-        if (!near && tr && tr.type !== 'none' && nb && Math.abs(nb.start - end) < 0.02) {
+        if (!near && isVideoTrack && tr && tr.type !== 'none' && nb && Math.abs(nb.start - end) < 0.02) {
           const w = tr.dur / 2;
           if ((t >= end - w && t <= end + w)) near = true;
         }
         if (!near) continue;
         const speed = clamp(c.speed || 1, 0.07, 16);
-        const raw = c.in + (t - start) * speed;
-        const desired = clamp(raw, 0, Math.max(0.05, (media.duration || raw)));
+        let desired;
+        if (c.reverse) {
+          // play the source backwards through the clip
+          const played = clamp(t - start, 0, d) * speed;
+          desired = clamp((c.out - 0.001) - played, c.in, c.out);
+        } else {
+          const raw = c.in + (t - start) * speed;
+          desired = clamp(raw, 0, Math.max(0.05, (media.duration || raw)));
+        }
         wanted.set(c.id, { clip: c, media, desired, active: t >= start && t < end });
       }
     }
@@ -156,12 +167,13 @@ export class Player {
       const speed = clamp(info.clip.speed || 1, 0.07, 16);
       try { if (el.playbackRate !== speed) el.playbackRate = speed; } catch { }
       const drift = Math.abs(el.currentTime - info.desired);
-      if (this.playing && info.active) {
+      if (this.playing && info.active && !info.clip.reverse) {
         if (drift > 0.14 && !el.seeking) { try { el.currentTime = info.desired; } catch { } }
         if (el.paused) el.play().catch(() => { });
       } else {
+        // reversed clips are seek-stepped every frame (browsers can't play backwards natively)
         if (!el.paused) el.pause();
-        if (drift > 0.03 && !el.seeking) { try { el.currentTime = info.desired; } catch { } }
+        if (drift > (this.playing ? 0.06 : 0.03) && !el.seeking) { try { el.currentTime = info.desired; } catch { } }
       }
     }
   }

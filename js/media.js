@@ -10,7 +10,7 @@ const videoEls = new Map();          // clipId -> HTMLVideoElement
 
 export async function importFiles(files, onProgress) {
   const out = [];
-  const list = [...files].filter(f => /^(video|audio)\//.test(f.type) || /\.(mp4|mov|m4v|webm|mkv|avi|m4a|mp3|wav|ogg|aac|flac)$/i.test(f.name));
+  const list = [...files].filter(f => /^(video|audio|image)\//.test(f.type) || /\.(mp4|mov|m4v|webm|mkv|avi|m4a|mp3|wav|ogg|aac|flac|png|jpe?g|gif|webp|bmp)$/i.test(f.name));
   for (let i = 0; i < list.length; i++) {
     const f = list[i];
     try {
@@ -28,14 +28,17 @@ export async function importFiles(files, onProgress) {
 export async function ingestFile(file, opts = {}) {
   const id = uid();
   await idb.put('media', { id, blob: file, name: file.name, addedAt: Date.now() });
-  const kind = file.type.startsWith('audio') || /\.(m4a|mp3|wav|ogg|aac|flac)$/i.test(file.name) ? 'audio' : 'video';
+  const kind = file.type.startsWith('audio') || /\.(m4a|mp3|wav|ogg|aac|flac)$/i.test(file.name) ? 'audio'
+    : file.type.startsWith('image') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name) ? 'image' : 'video';
   const rec = {
     id, kind, name: opts.name || file.name || 'clip', mime: file.type, size: file.size,
     duration: 0, width: 0, height: 0, fps: 30, hasAudio: false, peaks: null, thumb: null,
     fromVideo: !!opts.fromVideo, addedAt: Date.now(),
   };
   const url = urlFor(rec);
-  if (kind === 'video') {
+  if (kind === 'image') {
+    await probeImage(rec);
+  } else if (kind === 'video') {
     await probeVideo(rec, url);
     await makeThumb(rec, url);
   } else {
@@ -75,6 +78,32 @@ export async function urlReady(rec) {
   u = URL.createObjectURL(row.blob);
   blobUrls.set(rec.id, u);
   return u;
+}
+
+async function probeImage(rec) {
+  const url = await urlReady(rec);
+  await new Promise((res) => {
+    const img = new Image();
+    img.onload = () => {
+      rec.width = img.naturalWidth; rec.height = img.naturalHeight;
+      rec.thumb = url; res();
+    };
+    img.onerror = res;
+    img.src = url;
+    setTimeout(res, 8000);
+  });
+  // small preview thumb to keep memory low in grids
+  try {
+    const img2 = new Image();
+    await new Promise(res => { img2.onload = res; img2.onerror = res; img2.src = url; setTimeout(res, 5000); });
+    const scale = Math.min(1, 480 / Math.max(1, img2.naturalWidth));
+    const c = document.createElement('canvas');
+    c.width = Math.max(2, Math.round(img2.naturalWidth * scale));
+    c.height = Math.max(2, Math.round(img2.naturalHeight * scale));
+    c.getContext('2d').drawImage(img2, 0, 0, c.width, c.height);
+    rec.thumb = c.toDataURL('image/jpeg', 0.8);
+    // note: full-res loads via urlReady() when compositing
+  } catch { }
 }
 
 async function probeVideo(rec, url) {

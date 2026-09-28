@@ -17,6 +17,7 @@ import { drawFrame, videoElSync } from './render.js';
 import {
   textEditor, speedEditor, cropEditor, volumeEditor, beatSyncStudio,
   projectSettings, confirmDlg, promptDlg, openModal, slider, toggle,
+  trimDialog, animationDialog,
 } from './dialogs.js';
 import { Panels } from './panels.js';
 import { openExportFlow } from './export.js';
@@ -45,6 +46,7 @@ export class EditorScreen {
       onMutateBegin: () => this.history.push(deepClone(this.project)),
       onMutateEnd: () => this.afterChange(),
       onTrackHeader: (trackId, ev) => this.trackHeaderMenu(trackId, ev),
+      onClipOpen: clipId => this.openClipEditor(clipId),
       onZoom: () => { },
     });
     this.panels = new Panels(this);
@@ -74,8 +76,9 @@ export class EditorScreen {
     this.previewWrap = el('div', { class: 'preview-wrap' });
     this.previewBox = el('div', { class: 'preview-box' });
     this.previewCanvas = el('canvas', { class: 'preview-canvas' });
-    this.previewCanvas.addEventListener('click', () => this.player.toggle());
+    this.previewCanvas.addEventListener('click', () => { if (!this._gestureMoved) this.player.toggle(); });
     this.previewBox.append(this.previewCanvas);
+    this._bindPreviewGestures(this.previewCanvas);
     this.previewWrap.append(this.previewBox);
 
     // transport
@@ -118,9 +121,10 @@ export class EditorScreen {
     this.panelHost = el('div', { class: 'panel-host' });
     this.tabbar = el('div', { class: 'tabbar' });
     const tabs = [
-      ['media', '🗂', 'Media'], ['audio', '🎵', 'Audio'], ['text', '🅣', 'Text'],
-      ['effects', '✨', 'Effects'], ['adjust', '🎨', 'Adjust'], ['trans', '🔀', 'Trans'],
-      ['export', '⤴', 'Export'],
+      ['edit', '🗂', 'Edit'], ['audio', '🎵', 'Audio'], ['text', '🅣', 'Text'],
+      ['overlay', '⬒', 'Overlay'], ['effects', '✨', 'FX'], ['filters', '🎨', 'Filters'],
+      ['adjust', '🎚', 'Adjust'], ['trans', '🔀', 'Trans'], ['canvas', '🖼', 'Canvas'],
+      ['speed', '⏩', 'Speed'],
     ];
     for (const [id, icon, label] of tabs) {
       const b = el('button', { class: 'tab-btn', dataset: { tab: id } }, el('span', { class: 'tab-icon' }, icon), el('span', { class: 'tab-label' }, label));
@@ -191,6 +195,84 @@ export class EditorScreen {
 
   sel() { return this.selectedClipId ? findClip(this.project, this.selectedClipId) : null; }
 
+  /* ---- direct manipulation on the preview (move / pinch-scale / rotate) ---- */
+  _bindPreviewGestures(canvas) {
+    const pointers = new Map();
+    let gesture = null; // {clip, mode, startX, startY, x0, y0, scale0, rot0, dist0, ang0, pushed}
+    const VISUAL = ['video', 'still', 'ovl', 'text'];
+
+    const ptPos = e => {
+      const r = canvas.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height };
+    };
+    const twoInfo = () => {
+      const [a, b] = [...pointers.values()];
+      return {
+        dist: Math.hypot(a.x - b.x, a.y - b.y),
+        ang: Math.atan2(b.y - a.y, b.x - a.x),
+        cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2,
+      };
+    };
+
+    canvas.addEventListener('pointerdown', e => {
+      const f = this.sel();
+      if (!f || !VISUAL.includes(f.clip.kind)) return;
+      const pos = ptPos(e);
+      pointers.set(e.pointerId, pos);
+      try { canvas.setPointerCapture(e.pointerId); } catch { }
+      if (pointers.size === 2) {
+        const ti = twoInfo();
+        gesture = { clip: f.clip, mode: 'pinch', scale0: f.clip.scale || 1, rot0: f.clip.rotation || 0, dist0: ti.dist, ang0: ti.ang, pushed: gesture?.pushed || false };
+      } else if (pointers.size === 1) {
+        gesture = { clip: f.clip, mode: 'drag', startX: pos.x, startY: pos.y, x0: f.clip.x || 0, y0: f.clip.y || 0, pushed: false };
+      }
+      this._gestureMoved = false;
+    });
+
+    canvas.addEventListener('pointermove', e => {
+      if (!gesture || !pointers.has(e.pointerId)) return;
+      const pos = ptPos(e);
+      pointers.set(e.pointerId, pos);
+      const c = gesture.clip;
+      if (!gesture.pushed) {
+        this.beginEdit();
+        gesture.pushed = true;
+        this._gestureMoved = true;
+      }
+      if (gesture.mode === 'drag' && pointers.size === 1) {
+        const dx = (pos.x - gesture.startX) / pos.w;
+        const dy = (pos.y - gesture.startY) / pos.h;
+        this.mutateLive(() => {
+          c.x = clamp(gesture.x0 + dx, -1.5, 1.5);
+          c.y = clamp(gesture.y0 + dy, -1.5, 1.5);
+        });
+      } else if (gesture.mode === 'pinch' && pointers.size === 2) {
+        const ti = twoInfo();
+        const s = clamp(gesture.scale0 * (ti.dist / Math.max(10, gesture.dist0)), 0.05, 6);
+        const ang = (ti.ang - gesture.ang0) * 180 / Math.PI;
+        this.mutateLive(() => {
+          c.scale = s;
+          c.rotation = Math.round(((gesture.rot0 + ang) % 360) * 10) / 10;
+        });
+      }
+    });
+
+    const end = e => {
+      pointers.delete(e.pointerId);
+      if (pointers.size === 1) {
+        // pinch -> drag continuation
+        const [pos] = [...pointers.values()];
+        if (gesture) gesture = { clip: gesture.clip, mode: 'drag', startX: pos.x, startY: pos.y, x0: gesture.clip.x || 0, y0: gesture.clip.y || 0, pushed: true };
+      }
+      if (pointers.size === 0 && gesture) {
+        if (gesture.pushed) { this.autosave(); this.renderActionBar(); }
+        gesture = null;
+      }
+    };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+  }
+
   renderActionBar() {
     const found = this.sel();
     this.actionBar.innerHTML = '';
@@ -204,37 +286,120 @@ export class EditorScreen {
     const { track, clip } = found;
     const btn = (label, fn, cls = '') => el('button', { class: 'action-btn ' + cls, onclick: fn }, label);
     const isMedia = clip.kind === 'video' || clip.kind === 'audio';
+    const isVisual = clip.kind === 'video' || clip.kind === 'still' || clip.kind === 'ovl';
+
+    // primary row — the CapCut-style essential tools
     this.actionBar.append(
       btn('✂ Split', () => this.splitAtPlayhead(clip)),
-      btn('⧉ Copy', () => this.duplicateClip(clip)),
+      btn('↔ Trim', () => {
+        if (clip.kind === 'video' || clip.kind === 'audio') trimDialog(this.api(), clip);
+        else toast('Drag the clip edges to trim');
+      }),
       btn('🗑', () => this.deleteClip(clip), 'danger'),
+      btn('⧉ Duplicate', () => this.duplicateClip(clip)),
     );
-    if (clip.kind === 'video' || clip.kind === 'still') {
+    if (clip.kind === 'video') {
       this.actionBar.append(
-        btn('⚡ Freeze', () => this.freezeFrame(clip)),
-        btn('🔎 Crop', () => cropEditor(this.api(), clip)),
-        btn('✨ FX', () => this.panels.open('effects')),
-        btn('🎨 Grade', () => this.panels.open('adjust')),
-        btn('🔀 Trans', () => this.panels.open('trans')),
+        btn((clip.reverse ? '⏹ Reverse ✓' : '⏪ Reverse'), () => {
+          this.mutate('Reverse', p => { const f = findClip(p, clip.id); if (f) f.clip.reverse = !f.clip.reverse; });
+          this.renderActionBar();
+          this.player.requestDraw();
+          toast(clip.reverse ? 'Clip plays backwards' : 'Reverse off');
+        }),
       );
     }
     if (isMedia) {
       this.actionBar.append(
         btn('⏩ Speed', () => speedEditor(this.api(), clip)),
-        btn('🔊 Vol', () => volumeEditor(this.api(), clip)),
-        btn(clip.muted ? '🔇→🔊' : '🔊→🔇', () => { this.mutate('Mute', p => { const f = findClip(p, clip.id); if (f) f.clip.muted = !f.clip.muted; }); this.renderActionBar(); this.timeline.layout(); }),
+        btn('🔊 Volume', () => volumeEditor(this.api(), clip)),
+      );
+    }
+    if (isVisual) {
+      this.actionBar.append(
+        btn('🎞 Animation', () => animationDialog(this.api(), clip)),
+        btn('🎨 Filters', () => this.panels.open('filters')),
+        btn('🎚 Adjust', () => this.panels.open('adjust')),
       );
     }
     if (clip.kind === 'video') {
-      this.actionBar.append(btn('🎵 Extract audio', () => this.extractAudio(clip)));
+      this.actionBar.append(
+        btn('⚡ Freeze', () => this.freezeFrame(clip)),
+        btn('🔎 Crop', () => cropEditor(this.api(), clip)),
+        btn('🔀 Transition', () => this.panels.open('trans')),
+        btn('🎵 Extract audio', () => this.extractAudio(clip)),
+      );
+    }
+    if (clip.kind === 'ovl') {
+      this.actionBar.append(
+        btn('⚙ Overlay', () => this.overlayMediaStyle(clip)),
+        btn('↔ Canvas pos', () => toast('Drag / pinch the overlay directly in the preview')),
+      );
     }
     if (clip.kind === 'text') {
-      this.actionBar.append(btn('✎ Edit', () => textEditor(this.api(), clip)));
+      this.actionBar.append(btn('✎ Edit text', () => textEditor(this.api(), clip)));
     }
     if (clip.kind === 'overlay') {
       this.actionBar.append(btn('⚙ Style', () => this.overlayStyle(clip)));
     }
+    // overflow
+    this.actionBar.append(btn('⋯', () => this.clipMoreMenu(clip)));
   }
+
+  openClipEditor(clipId) {
+    const f = findClip(this.project, clipId);
+    if (!f) return;
+    if (f.clip.kind === 'text') textEditor(this.api(), f.clip);
+    else if (f.clip.kind === 'ovl') this.overlayMediaStyle(f.clip);
+    else if (f.clip.kind === 'video') trimDialog(this.api(), f.clip);
+  }
+
+  clipMoreMenu(clip) {
+    const body = el('div', { class: 'stack' });
+    const rows = [];
+    if (clip.kind === 'video' || clip.kind === 'still' || clip.kind === 'ovl') {
+      rows.push(['✨ TRALIX FX', () => this.panels.open('effects')]);
+    }
+    if (clip.kind === 'video' || clip.kind === 'audio') {
+      rows.push(['⏱ Nudge left 0.1s', () => this.mutate('Nudge', p => { const f = findClip(p, clip.id); if (f) f.clip.start = Math.max(0, f.clip.start - 0.1); })]);
+      rows.push(['⏱ Nudge right 0.1s', () => this.mutate('Nudge', p => { const f = findClip(p, clip.id); if (f) f.clip.start += 0.1; })]);
+    }
+    rows.push(['🧹 Reset transforms', () => this.mutate('Reset transform', p => {
+      const f = findClip(p, clip.id);
+      if (f) { f.clip.scale = 1; f.clip.x = 0; f.clip.y = 0; f.clip.rotation = 0; if (f.clip.crop) f.clip.crop = { l: 0, t: 0, r: 0, b: 0 }; }
+    })]);
+    const bodyEl = el('div', { class: 'stack' }, ...rows.map(([label, fn]) => el('button', { class: 'btn', onclick: fn }, label)));
+    body.append(bodyEl);
+    openModal({ title: 'More Tools', body, actions: [{ label: 'Close', kind: 'ghost' }] });
+  }
+
+  overlayMediaStyle(clip) {
+    this.beginEdit();
+    const c = clip;
+    const upd = () => this.player.requestDraw();
+    const body = el('div', { class: 'stack' },
+      slider('Opacity', c.opacity ?? 1, 0, 1, 0.05, v => { this.mutateLive(() => { c.opacity = v; }); upd(); }, v => Math.round(v * 100) + '%'),
+      slider('Size', c.scale, 0.1, 4, 0.05, v => { this.mutateLive(() => { c.scale = v; }); upd(); }, v => v.toFixed(2) + '×'),
+      slider('Position X', c.x, -1, 1, 0.01, v => { this.mutateLive(() => { c.x = v; }); upd(); }, v => Math.round(v * 100) + '%'),
+      slider('Position Y', c.y, -1, 1, 0.01, v => { this.mutateLive(() => { c.y = v; }); upd(); }, v => Math.round(v * 100) + '%'),
+      slider('Rotation', c.rotation || 0, -180, 180, 1, v => { this.mutateLive(() => { c.rotation = v; }); upd(); }, v => v.toFixed(0) + '°'),
+      slider('Duration', c.duration, 0.2, 30, 0.2, v => { this.mutateLive(() => { c.duration = v; }); this.timeline.layout(); }, v => v.toFixed(1) + 's'),
+      el('div', { class: 'preset-grid' },
+        el('button', { class: 'preset-btn', onclick: e => { this.mutateLive(() => { c.scale = 1; c.x = 0; c.y = 0; c.rotation = 0; }); upd(); } }, '⌂ Reset'),
+        el('button', { class: 'preset-btn', onclick: e => { this.mutateLive(() => { c.contain = !c.contain; }); upd(); e.target.classList.toggle('on'); } }, (c.contain ? '🔲 Fit' : '⬛ Fill')),
+        el('button', { class: 'preset-btn', onclick: () => { this.closeModals(); cropEditor(this.api(), c); } }, '🔎 Crop'),
+        el('button', { class: 'preset-btn', onclick: () => { this.closeModals(); animationDialog(this.api(), c); } }, '🎞 Animation'),
+      ),
+      el('div', { class: 'hint' }, 'Or drag / pinch the overlay directly in the preview.'),
+    );
+    openModal({
+      title: 'Overlay', body,
+      actions: [
+        { label: 'Cancel', kind: 'ghost', onclick: () => this.cancelEdit() },
+        { label: 'Done', kind: 'primary' },
+      ],
+    });
+  }
+  closeModals() { document.querySelectorAll('.modal-backdrop').forEach(m => m.remove()); }
 
   overlayStyle(clip) {
     this.beginEdit();

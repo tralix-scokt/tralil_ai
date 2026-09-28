@@ -402,6 +402,268 @@ export const FX = {
       }
     },
   },
+
+  /* ---- TRALIX FX library additions (v2) ---- */
+  killflash: {
+    name: 'Kill Flash', icon: '☠️', cat: 'gaming',
+    p: {
+      intensity: { label: 'Intensity', min: 0.2, max: 1, def: 0.85, step: 0.05 },
+      rate: { label: 'Hits / sec', min: 0.25, max: 6, def: 1, step: 0.25 },
+      color: { label: 'Color', type: 'color', def: '#ffffff' },
+    },
+    post(ctx, W, H, p, env, key, tSec, seed) {
+      const phase = (tSec * p.rate) % 1;
+      const e = pulse(phase, 0.06, 13) * p.intensity;
+      if (e <= 0.02) return;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = rgba(p.color || '#ffffff', clamp(e, 0, 1));
+      ctx.fillRect(0, 0, W, H);
+      // red sting at the tail of the flash
+      const e2 = Math.max(0, e - 0.55) * 1.8;
+      if (e2 > 0.02) {
+        ctx.fillStyle = rgba('#ff2444', clamp(e2 * 0.5, 0, 1));
+        ctx.fillRect(0, 0, W, H);
+      }
+      ctx.restore();
+    },
+  },
+  scope: {
+    name: 'Scope Zoom', icon: '🎯', cat: 'gaming',
+    p: {
+      amount: { label: 'Zoom', min: 0.05, max: 0.6, def: 0.22, step: 0.01 },
+      rate: { label: 'Rate (per sec)', min: 0.2, max: 3, def: 0.9, step: 0.1 },
+    },
+    geom(p, prog, localT) {
+      const phase = (localT * p.rate) % 1;
+      const e = pulse(phase, 0.22, 4.5);
+      return { scale: 1 + p.amount * e };
+    },
+    post(ctx, W, H, p, env, key, tSec, seed) {
+      const phase = (tSec * p.rate) % 1;
+      const e = pulse(phase, 0.22, 4.5);
+      if (e < 0.05) return;
+      const r = Math.min(W, H) * (0.62 - 0.12 * e);
+      ctx.save();
+      // darken outside the scope circle
+      ctx.fillStyle = `rgba(0,0,0,${(0.75 * e).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.arc(W / 2, H / 2, r, 0, Math.PI * 2, true);
+      ctx.fill();
+      // crosshair
+      ctx.strokeStyle = `rgba(255,255,255,${(0.55 * e).toFixed(3)})`;
+      ctx.lineWidth = Math.max(1.5, W / 900);
+      ctx.beginPath();
+      ctx.moveTo(W / 2 - r, H / 2); ctx.lineTo(W / 2 + r, H / 2);
+      ctx.moveTo(W / 2, H / 2 - r); ctx.lineTo(W / 2, H / 2 + r);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(W / 2, H / 2, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    },
+  },
+  hitzoom: {
+    name: 'Hit Zoom', icon: '💥', cat: 'gaming',
+    p: {
+      amount: { label: 'Punch', min: 0.05, max: 0.5, def: 0.2, step: 0.01 },
+      rate: { label: 'Hits / sec', min: 0.25, max: 4, def: 1, step: 0.25 },
+      twist: { label: 'Twist', min: 0, max: 1, def: 0.3, step: 0.05 },
+    },
+    geom(p, prog, localT, seed) {
+      const phase = (localT * p.rate) % 1;
+      const e = pulse(phase, 0.08, 10);
+      return {
+        scale: 1 + p.amount * e,
+        rot: (noise1(localT * 90 + 31, seed) - 0.5) * 0.06 * p.twist * e,
+        dx: (noise1(localT * 90, seed) - 0.5) * 0.02 * e,
+      };
+    },
+    post(ctx, W, H, p, env, key, tSec, seed) {
+      const phase = (tSec * p.rate) % 1;
+      const e = pulse(phase, 0.08, 10);
+      if (e > 0.04) rgbPass(ctx, W, H, 4 * e * (W / 1280), 0.5, tSec, seed);
+    },
+  },
+  velocity: {
+    name: 'Velocity', icon: '💨', cat: 'gaming',
+    p: {
+      amount: { label: 'Streaks', min: 0.05, max: 1, def: 0.4, step: 0.05 },
+      angle: { label: 'Angle', min: 0, max: 360, def: 0, step: 15 },
+    },
+    post(ctx, W, H, p, env, key, tSec, seed) {
+      const a = clamp(p.amount, 0, 1);
+      const rad = (p.angle * Math.PI) / 180;
+      const dx = Math.cos(rad), dy = Math.sin(rad);
+      const s = scratchCanvas('vel', W, H);
+      s.x.clearRect(0, 0, W, H); s.x.drawImage(ctx.canvas, 0, 0);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = 1; i <= 5; i++) {
+        ctx.globalAlpha = 0.16 * a * (1 - i / 6);
+        const off = i * W * 0.014 * a;
+        ctx.drawImage(s.c, dx * off, dy * off);
+        ctx.drawImage(s.c, -dx * off, -dy * off);
+      }
+      ctx.restore();
+    },
+  },
+  distblock: {
+    name: 'Digital Distortion', icon: '🧩', cat: 'gaming',
+    p: {
+      intensity: { label: 'Intensity', min: 0.05, max: 1, def: 0.45, step: 0.05 },
+      speed: { label: 'Speed', min: 1, max: 24, def: 10, step: 1 },
+    },
+    post(ctx, W, H, p, env, key, tSec, seed) {
+      const rnd = srand(Math.floor(tSec * p.speed * 24) + seed * 131);
+      const s = scratchCanvas('distblock', W, H);
+      s.x.clearRect(0, 0, W, H); s.x.drawImage(ctx.canvas, 0, 0);
+      const blocks = 5 + Math.floor(rnd() * 9);
+      const px = Math.max(2, Math.round(W / 90));
+      ctx.save();
+      for (let i = 0; i < blocks; i++) {
+        const bx = rnd() * W, by = rnd() * H;
+        const bw = (0.05 + rnd() * 0.2) * W, bh = (0.02 + rnd() * 0.08) * H;
+        const ox = (rnd() - 0.5) * W * 0.1 * p.intensity;
+        // pixelated block copy
+        const tw = Math.max(2, Math.round(bw / px)), th = Math.max(2, Math.round(bh / px));
+        const t = scratchCanvas('distblockT', tw, th);
+        t.x.imageSmoothingEnabled = true;
+        t.x.clearRect(0, 0, tw, th);
+        t.x.drawImage(s.c, bx, by, bw, bh, 0, 0, tw, th);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(t.c, 0, 0, tw, th, bx + ox, by, bw, bh);
+        ctx.imageSmoothingEnabled = true;
+      }
+      ctx.restore();
+    },
+  },
+  lens: {
+    name: 'Lens', icon: '🔮', cat: 'cinematic',
+    p: { amount: { label: 'Softness', min: 0.05, max: 1, def: 0.45, step: 0.05 } },
+    post(ctx, W, H, p) {
+      const s = scratchCanvas('lens', W, H);
+      s.x.clearRect(0, 0, W, H);
+      s.x.filter = `blur(${Math.round((W / 60) * p.amount)}px)`;
+      s.x.drawImage(ctx.canvas, 0, 0);
+      s.x.filter = 'none';
+      // keep only the edges of the blurred copy
+      const g = s.x.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.22, W / 2, H / 2, Math.max(W, H) * 0.66);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, 'rgba(0,0,0,1)');
+      s.x.globalCompositeOperation = 'destination-in';
+      s.x.fillStyle = g;
+      s.x.fillRect(0, 0, W, H);
+      s.x.globalCompositeOperation = 'source-over';
+      ctx.drawImage(s.c, 0, 0);
+    },
+  },
+  leak: {
+    name: 'Light Leak', icon: '🌅', cat: 'cinematic',
+    p: {
+      intensity: { label: 'Intensity', min: 0.05, max: 1, def: 0.5, step: 0.05 },
+      speed: { label: 'Drift', min: 0.1, max: 2, def: 0.5, step: 0.1 },
+      color: { label: 'Color', type: 'color', def: '#ff8a3c' },
+    },
+    post(ctx, W, H, p, env, key, tSec) {
+      const t = tSec * p.speed;
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      for (let i = 0; i < 2; i++) {
+        const cx = W * (0.5 + 0.55 * Math.sin(t * (0.7 + i * 0.5) + i * 2.4));
+        const cy = H * (0.35 + 0.45 * Math.sin(t * (0.5 + i * 0.4) + i * 1.7));
+        const r = Math.max(W, H) * (0.35 + 0.12 * Math.sin(t + i));
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g.addColorStop(0, rgba(p.color || '#ff8a3c', 0.5 * p.intensity));
+        g.addColorStop(0.6, rgba(p.color || '#ff8a3c', 0.16 * p.intensity));
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+      }
+      ctx.restore();
+    },
+  },
+  cblur: {
+    name: 'Cinematic Blur', icon: '🎞️', cat: 'cinematic',
+    p: {
+      amount: { label: 'Blur', min: 0.05, max: 1, def: 0.45, step: 0.05 },
+      center: { label: 'Center size', min: 0.2, max: 0.8, def: 0.5, step: 0.05 },
+    },
+    post(ctx, W, H, p) {
+      const s = scratchCanvas('cblur', W, H);
+      s.x.clearRect(0, 0, W, H);
+      s.x.filter = `blur(${Math.round((W / 40) * p.amount)}px)`;
+      s.x.drawImage(ctx.canvas, 0, 0);
+      s.x.filter = 'none';
+      // keep only top/bottom of the blurred copy (tilt-shift)
+      const g = s.x.createLinearGradient(0, 0, 0, H);
+      const c = (1 - clamp(p.center, 0.1, 0.9)) / 2;
+      g.addColorStop(0, 'rgba(0,0,0,1)');
+      g.addColorStop(clamp(c, 0, 0.45), 'rgba(0,0,0,0)');
+      g.addColorStop(clamp(1 - c, 0.55, 1), 'rgba(0,0,0,0)');
+      g.addColorStop(1, 'rgba(0,0,0,1)');
+      s.x.globalCompositeOperation = 'destination-in';
+      s.x.fillStyle = g;
+      s.x.fillRect(0, 0, W, H);
+      s.x.globalCompositeOperation = 'source-over';
+      ctx.drawImage(s.c, 0, 0);
+    },
+  },
+  spin: {
+    name: 'Spin', icon: '🌀', cat: 'dynamic',
+    p: {
+      amount: { label: 'Angle', min: 1, max: 60, def: 12, step: 1 },
+      rate: { label: 'Rate', min: 0.2, max: 4, def: 1, step: 0.1 },
+    },
+    geom(p, prog, localT) {
+      return { rot: Math.sin(localT * Math.PI * 2 * p.rate) * p.amount * Math.PI / 180 };
+    },
+  },
+  pulse: {
+    name: 'Pulse', icon: '💓', cat: 'dynamic',
+    p: {
+      amount: { label: 'Strength', min: 0.02, max: 0.4, def: 0.1, step: 0.01 },
+      rate: { label: 'BPM-ish', min: 0.5, max: 8, def: 2, step: 0.1 },
+    },
+    geom(p, prog, localT) {
+      const phase = (localT * p.rate) % 1;
+      return { scale: 1 + p.amount * pulse(phase, 0.25, 6) };
+    },
+    post(ctx, W, H, p, env, key, tSec) {
+      const phase = (tSec * p.rate) % 1;
+      const e = pulse(phase, 0.25, 6);
+      if (e <= 0.03) return;
+      ctx.save();
+      ctx.globalCompositeOperation = 'soft-light';
+      ctx.fillStyle = rgba('#ffffff', 0.25 * e);
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    },
+  },
+  warp: {
+    name: 'Warp', icon: '🌊', cat: 'dynamic',
+    p: {
+      amount: { label: 'Amount', min: 0.05, max: 1, def: 0.4, step: 0.05 },
+      rate: { label: 'Speed', min: 0.2, max: 6, def: 1.5, step: 0.1 },
+    },
+    post(ctx, W, H, p, env, key, tSec) {
+      const strips = 28;
+      const s = scratchCanvas('warp', W, H);
+      s.x.clearRect(0, 0, W, H); s.x.drawImage(ctx.canvas, 0, 0);
+      const sh = H / strips;
+      ctx.save(); ctx.clearRect(0, 0, W, H);
+      for (let i = 0; i < strips; i++) {
+        const ph = Math.sin(tSec * p.rate * Math.PI * 2 + i * 0.45);
+        const off = ph * W * 0.035 * p.amount;
+        const sy = i * sh;
+        const squeeze = 1 + ph * 0.06 * p.amount;
+        ctx.drawImage(s.c, 0, sy, W, sh + 1, off, sy + (sh * (1 - squeeze)) / 2, W, sh * squeeze + 1);
+      }
+      ctx.restore();
+    },
+  },
+
 };
 
 const hash = (n) => { let x = Math.imul((n * 1e4) | 0 ^ 0x9E3779B9, 0x85EBCA6B); x ^= x >>> 13; x = Math.imul(x, 0xC2B2AE35); x ^= x >>> 16; return (x >>> 0) / 4294967296; };
@@ -445,6 +707,14 @@ function noiseTile(n) {
   return c;
 }
 
+
+/* TRALIX FX library categories */
+export const FX_CATS = {
+  gaming: { label: 'Gaming', icon: '🎮', types: ['killflash', 'impact', 'shake', 'scope', 'hitzoom', 'velocity', 'glitch', 'rgb', 'chroma', 'distblock'] },
+  cinematic: { label: 'Cinematic', icon: '🎬', types: ['film', 'mblur', 'glow', 'vignette', 'lens', 'leak', 'cblur', 'cinematic'] },
+  dynamic: { label: 'Dynamic', icon: '⚡', types: ['shake', 'zoom', 'spin', 'flash', 'pulse', 'distortion', 'warp'] },
+};
+
 /* ---------------- FX / grade presets ---------------- */
 export const FX_PRESETS = [
   { id: 'sniper', name: 'Sniper', icon: '🎯', adj: { contrast: 0.18, saturation: -0.12, shadows: -0.12, temperature: -0.15, vignette: 0.35, sharpen: 0.4 }, fx: [] },
@@ -459,18 +729,36 @@ export const FX_PRESETS = [
   { id: 'ranked', name: 'Ranked Clean', icon: '🏆', adj: { contrast: 0.08, saturation: 0.06, sharpen: 0.35 }, fx: [] },
 ];
 
-export const GRADE_PRESETS = [
-  { id: 'none', name: 'Original', adj: {} },
-  { id: 'cine', name: 'Cinematic', adj: { contrast: 0.14, saturation: 0.04, temperature: -0.06, shadows: -0.1, vignette: 0.22, fade: 0.05 } },
-  { id: 'teal', name: 'Teal & Orange', adj: { contrast: 0.16, saturation: 0.12, temperature: -0.1, tint: 0.06, vignette: 0.2 } },
-  { id: 'neonnight', name: 'Neon Night', adj: { contrast: 0.18, saturation: 0.32, exposure: -0.06, shadows: -0.14 } },
-  { id: 'coldblood', name: 'Cold Blood', adj: { temperature: -0.22, contrast: 0.12, saturation: -0.08, shadows: -0.12 } },
-  { id: 'warmretro', name: 'Warm Retro', adj: { temperature: 0.2, fade: 0.14, contrast: 0.06, saturation: -0.05 } },
-  { id: 'bw', name: 'High Contrast B&W', adj: { saturation: -1, contrast: 0.28, sharpen: 0.3 } },
-  { id: 'vivid', name: 'Vivid Gaming', adj: { saturation: 0.28, contrast: 0.16, sharpen: 0.25, highlights: 0.06 } },
-  { id: 'darkpop', name: 'Dark Pop', adj: { contrast: 0.22, saturation: 0.15, shadows: -0.2, highlights: -0.05, vignette: 0.25 } },
-  { id: 'dreamy', name: 'Dreamy', adj: { fade: 0.18, saturation: 0.1, exposure: 0.08, blur: 0.4 } },
+export const TRALIX_FILTERS = [
+  // gaming
+  { id: 'none', name: 'Original', cat: 'gaming', adj: {} },
+  { id: 'sniper', name: 'Sniper', cat: 'gaming', icon: '🎯', adj: { contrast: 0.18, saturation: -0.12, shadows: -0.12, temperature: -0.15, vignette: 0.35, sharpen: 0.4 } },
+  { id: 'quickscope', name: 'Quickscope', cat: 'gaming', icon: '🔭', adj: { contrast: 0.25, sharpen: 0.55, shadows: -0.1 } },
+  { id: 'shotgun', name: 'Shotgun', cat: 'gaming', icon: '💥', adj: { contrast: 0.2, temperature: 0.15, saturation: 0.1 } },
+  { id: 'ranked', name: 'Ranked Pro', cat: 'gaming', icon: '🏆', adj: { contrast: 0.1, saturation: 0.05, sharpen: 0.35 } },
+  { id: 'gg', name: 'GG Glow', cat: 'gaming', icon: '🎮', adj: { contrast: 0.14, saturation: 0.22, exposure: 0.04 }, fx: [{ type: 'glow', p: { amount: 0.3 } }] },
+  // cinematic
+  { id: 'cine', name: 'Cinematic', cat: 'cinematic', icon: '🎬', adj: { contrast: 0.14, saturation: 0.04, temperature: -0.06, shadows: -0.1, vignette: 0.22, fade: 0.05 } },
+  { id: 'teal', name: 'Teal & Orange', cat: 'cinematic', icon: '🌇', adj: { contrast: 0.16, saturation: 0.12, temperature: -0.1, tint: 0.06, vignette: 0.2 } },
+  { id: 'filmic', name: 'Filmic', cat: 'cinematic', icon: '🎞️', adj: { fade: 0.1, contrast: 0.1 }, fx: [{ type: 'film', p: { amount: 0.45 } }] },
+  { id: 'leak', name: 'Sunset Leak', cat: 'cinematic', icon: '🌅', adj: { temperature: 0.12, fade: 0.06 }, fx: [{ type: 'leak', p: { intensity: 0.5, speed: 0.4 } }] },
+  // dark
+  { id: 'coldblood', name: 'Cold Blood', cat: 'dark', icon: '🥶', adj: { temperature: -0.22, contrast: 0.12, saturation: -0.08, shadows: -0.12 } },
+  { id: 'darkpop', name: 'Dark Pop', cat: 'dark', icon: '🌑', adj: { contrast: 0.22, saturation: 0.15, shadows: -0.2, highlights: -0.05, vignette: 0.25 } },
+  { id: 'midnight', name: 'Midnight', cat: 'dark', icon: '🌙', adj: { exposure: -0.1, contrast: 0.18, saturation: -0.05, shadows: -0.18, vignette: 0.4 } },
+  { id: 'noir', name: 'Noir', cat: 'dark', icon: '🎭', adj: { saturation: -1, contrast: 0.3, vignette: 0.35, sharpen: 0.3 } },
+  // vibrant
+  { id: 'vivid', name: 'Vivid Gaming', cat: 'vibrant', icon: '⚡', adj: { saturation: 0.28, contrast: 0.16, sharpen: 0.25, highlights: 0.06 } },
+  { id: 'neonnight', name: 'Neon Night', cat: 'vibrant', icon: '🌆', adj: { contrast: 0.18, saturation: 0.32, exposure: -0.06, shadows: -0.14 }, fx: [{ type: 'glow', p: { amount: 0.35 } }] },
+  { id: 'pop', name: 'Pop', cat: 'vibrant', icon: '🍭', adj: { saturation: 0.4, contrast: 0.1, brightness: 0.05 } },
+  { id: 'retro', name: 'Warm Retro', cat: 'vibrant', icon: '📻', adj: { temperature: 0.2, fade: 0.14, contrast: 0.06, saturation: -0.05 } },
+  // anime
+  { id: 'anime', name: 'Anime Pop', cat: 'anime', icon: '🌸', adj: { saturation: 0.45, contrast: 0.16, brightness: 0.06, sharpen: 0.3 }, fx: [{ type: 'glow', p: { amount: 0.28 } }] },
+  { id: 'animenight', name: 'Anime Night', cat: 'anime', icon: '🌃', adj: { saturation: 0.35, contrast: 0.2, exposure: -0.04, shadows: -0.12, temperature: -0.08 }, fx: [{ type: 'glow', p: { amount: 0.4 } }] },
+  { id: 'manga', name: 'Manga', cat: 'anime', icon: '🖋️', adj: { saturation: -0.85, contrast: 0.35, sharpen: 0.6, brightness: 0.04 } },
+  { id: 'dreamy', name: 'Dreamy', cat: 'anime', icon: '💫', adj: { fade: 0.16, saturation: 0.12, exposure: 0.08, blur: 0.5 } },
 ];
+export const GRADE_PRESETS = TRALIX_FILTERS; // backwards-compat alias
 
 /* ---------------- transitions ---------------- */
 export const TRANSITIONS = {

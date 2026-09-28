@@ -117,6 +117,7 @@ export function textEditor(api, clip) {
     ),
     slider('Size', c.size, 2, 30, 0.5, v => { api.mutateLive(() => { c.size = v; }); upd(); }, v => v.toFixed(1)),
     slider('Letter spacing', c.letterSpacing, -2, 20, 0.5, v => { api.mutateLive(() => { c.letterSpacing = v; }); upd(); }, v => v.toFixed(1)),
+    slider('Opacity', c.opacity ?? 1, 0, 1, 0.05, v => { api.mutateLive(() => { c.opacity = v; }); upd(); }, v => Math.round(v * 100) + '%'),
     slider('Line spacing', c.lineHeight, 0.7, 2.5, 0.05, v => { api.mutateLive(() => { c.lineHeight = v; }); upd(); }, v => v.toFixed(2)),
     el('div', { class: 'field-label' }, 'Alignment'),
     segButtons([{ id: 'left', label: '⬅' }, { id: 'center', label: '↔' }, { id: 'right', label: '➡' }], c.align, id => { api.mutateLive(() => { c.align = id; }); upd(); }),
@@ -306,6 +307,65 @@ export function volumeEditor(api, clip) {
   );
   openModal({
     title: 'Volume & Fades', body,
+    actions: [
+      { label: 'Cancel', kind: 'ghost', onclick: () => api.cancelEdit() },
+      { label: 'Done', kind: 'primary' },
+    ],
+  });
+}
+
+
+/* ================= TRIM (numeric in/out) ================= */
+export function trimDialog(api, clip) {
+  api.beginEdit();
+  const c = clip;
+  const media = mediaMap.get(c.mediaId);
+  const maxOut = media ? (media.duration || c.out) : c.out;
+  const info = el('div', { class: 'hint center' }, '');
+  const upd = () => {
+    const dur = (c.out - c.in) / (c.speed || 1);
+    info.textContent = `Kept: ${dur.toFixed(2)}s of source (in ${c.in.toFixed(2)}s → out ${c.out.toFixed(2)}s)`;
+    api.player.requestDraw();
+  };
+  const body = el('div', { class: 'stack' },
+    el('div', { class: 'field-label' }, 'Start (in point)'),
+    slider('In', c.in, 0, Math.max(0.1, c.out - 0.1), 0.05, v => { api.mutateLive(() => { c.in = Math.min(v, c.out - 0.1); }); upd(); }, v => v.toFixed(2) + 's'),
+    el('div', { class: 'field-label' }, 'End (out point)'),
+    slider('Out', c.out, c.in + 0.1, Math.max(c.in + 0.2, maxOut), 0.05, v => { api.mutateLive(() => { c.out = Math.max(v, c.in + 0.1); }); upd(); }, v => v.toFixed(2) + 's'),
+    info,
+    el('div', { class: 'hint' }, 'Tip: you can also drag the clip edges on the timeline.'),
+  );
+  upd();
+  openModal({
+    title: 'Trim Clip', body,
+    actions: [
+      { label: 'Cancel', kind: 'ghost', onclick: () => api.cancelEdit() },
+      { label: 'Done', kind: 'primary', onclick: () => api.timeline.layout() },
+    ],
+  });
+}
+
+/* ================= CLIP ANIMATION (entrance / exit) ================= */
+export function animationDialog(api, clip) {
+  api.beginEdit();
+  const c = clip;
+  if (!c.anim) c.anim = { in: 'none', out: 'none', dur: 0.4 };
+  const upd = () => api.player.requestDraw();
+  const opts = [
+    { id: 'none', label: 'None' }, { id: 'fade', label: 'Fade' }, { id: 'slide', label: 'Slide' },
+    { id: 'zoom', label: 'Zoom' }, { id: 'pop', label: 'Pop' }, { id: 'bounce', label: 'Bounce' },
+    { id: 'spin', label: 'Spin' },
+  ];
+  const body = el('div', { class: 'stack' },
+    el('div', { class: 'field-label' }, 'Entrance animation'),
+    segButtons(opts, c.anim.in || 'none', id => { api.mutateLive(() => { c.anim.in = id; }); upd(); }),
+    el('div', { class: 'field-label' }, 'Exit animation'),
+    segButtons(opts, c.anim.out || 'none', id => { api.mutateLive(() => { c.anim.out = id; }); upd(); }),
+    slider('Duration', c.anim.dur ?? 0.4, 0.1, 2, 0.05, v => { api.mutateLive(() => { c.anim.dur = v; }); upd(); }, v => v.toFixed(2) + 's'),
+    el('div', { class: 'hint' }, 'Animations play in and out at the clip edges — great for overlay photos and PiP videos.'),
+  );
+  openModal({
+    title: 'Animation', body,
     actions: [
       { label: 'Cancel', kind: 'ghost', onclick: () => api.cancelEdit() },
       { label: 'Done', kind: 'primary' },

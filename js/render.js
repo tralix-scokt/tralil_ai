@@ -117,10 +117,50 @@ function clipIdSeed(clip) {
   return Math.abs(s) % 100000;
 }
 
-/* shared draw pipeline for video/still: layer render + effects + composite */
+/* media clip entrance/exit animation -> alpha + transform deltas */
+function mediaAnim(clip, localT, W, H) {
+  const a = clip.anim;
+  if (!a || (a.in === 'none' && a.out === 'none')) return { alpha: 1, sx: 1, dx: 0, dy: 0, rot: 0 };
+  const dur = Math.max(0.12, a.dur || 0.4);
+  const durT = clip.kind === 'video' || clip.kind === 'ovl' ? dur : dur; // timeline seconds
+  const ai = clamp(localT / durT, 0, 1);
+  const total = (clip.kind === 'video' || clip.kind === 'ovl' || clip.kind === 'still')
+    ? clipDuration(clip) : (clip.duration || 1);
+  const ao2 = clamp((total - localT) / durT, 0, 1);
+  let alpha = 1, sx = 1, dx = 0, dy = 0, rot = 0;
+  const apply = (name, p, dir) => {
+    switch (name) {
+      case 'fade': alpha *= easeOut(p); break;
+      case 'slide':
+        alpha *= easeOut(p);
+        if (dir === 'in') dy += (1 - easeOut(p)) * H * 0.1;
+        else dy -= (1 - easeOut(p)) * H * 0.1;
+        break;
+      case 'zoom': alpha *= p; sx *= 1.6 - 0.6 * easeOut(p); break;
+      case 'pop': alpha *= easeOut(p); sx *= 0.5 + 0.5 * easeBack(p); break;
+      case 'bounce': alpha *= easeOut(p); sx *= 1 + 0.25 * Math.sin(p * Math.PI) * (dir === 'in' ? 1 : -1); break;
+      case 'spin': alpha *= easeOut(p); rot += (1 - easeOut(p)) * 0.35 * (dir === 'in' ? 1 : -1); break;
+    }
+  };
+  if (a.in && a.in !== 'none') apply(a.in, ai, 'in');
+  if (a.out && a.out !== 'none') apply(a.out, ao2, 'out');
+  return { alpha, sx, dx, dy, rot };
+}
+
+/* shared draw pipeline for video/still/ovl: layer render + effects + composite */
 function drawLayer(ctx, W, H, clip, localT, t, drawSrc, geom, alpha, vw = 1280, vh = 720, layer = null) {
   const L = layer || lay('A', W, H);
   const x = L.x;
+  // fold clip animations into geometry/alpha
+  const ma = mediaAnim(clip, localT, W, H);
+  alpha *= ma.alpha;
+  const animGeom = {
+    scale: (geom.scale || 1) * ma.sx,
+    dx: (geom.dx || 0) + ma.dx / W,
+    dy: (geom.dy || 0) + ma.dy / H,
+    rot: (geom.rot || 0) + ma.rot * 180 / Math.PI,
+  };
+  geom = animGeom;
 
   // crop in source pixels
   const cr = clip.crop || { l: 0, t: 0, r: 0, b: 0 };
@@ -129,10 +169,11 @@ function drawLayer(ctx, W, H, clip, localT, t, drawSrc, geom, alpha, vw = 1280, 
 
   // rotation/flip effective dims
   const rot = ((clip.rotation || 0) + (geom.rot || 0)) * Math.PI / 180;
+  if (alpha <= 0.004) { return; }
   const quarter = Math.abs(((clip.rotation || 0) % 180)) === 90;
   const ew = quarter ? sh : sw, eh = quarter ? sw : sh;
 
-  const fit = Math.max(W / ew, H / eh) * (geom.scale || 1);
+  const fit = (clip.contain ? Math.min : Math.max)(W / ew, H / eh) * (geom.scale || 1);
   const dw = ew * fit, dh = eh * fit;
 
   x.save();
@@ -276,6 +317,7 @@ export function drawTextClip(ctx, clip, localT, dur, W, H) {
   let text = clip.text || '';
   if (clip.uppercase) text = text.toUpperCase();
   const sizePx = (clip.size / 100) * H;
+  const textOpacity = clamp(clip.opacity ?? 1, 0, 1);
   const font = `${clip.italic ? 'italic ' : ''}${clip.weight || 700} ${sizePx}px ${FONT_STACKS[clip.font] || FONT_STACKS.Rajdhani}`;
   ctx.save();
   ctx.font = font;
@@ -321,10 +363,11 @@ export function drawTextClip(ctx, clip, localT, dur, W, H) {
   }
 
   const drawLine = (ln, ly, rgbMode) => {
+    const eAlpha = alpha * textOpacity;
     const x0 = clip.align === 'left' ? 0 : clip.align === 'right' ? 0 : 0;
     if (rgbMode) {
       ctx.save();
-      ctx.globalAlpha = alpha * 0.8;
+      ctx.globalAlpha = eAlpha * 0.8;
       ctx.fillStyle = '#ff2a2a';
       ctx.fillText(ln, -sizePx * 0.03, ly - sizePx * 0.01);
       ctx.fillStyle = '#2affff';
@@ -338,7 +381,7 @@ export function drawTextClip(ctx, clip, localT, dur, W, H) {
       ctx.shadowOffsetX = (clip.shadow.x || 0) * sizePx / 24;
       ctx.shadowOffsetY = (clip.shadow.y || 0) * sizePx / 24;
       ctx.fillStyle = clip.color;
-      ctx.globalAlpha = alpha;
+      ctx.globalAlpha = eAlpha;
       ctx.fillText(ln, x0, ly);
       ctx.restore();
     }
@@ -347,7 +390,7 @@ export function drawTextClip(ctx, clip, localT, dur, W, H) {
       ctx.shadowColor = clip.glow.color || '#0ff';
       ctx.shadowBlur = 18 * (clip.glow.strength || 1) * sizePx / 24;
       ctx.fillStyle = clip.glow.color || '#0ff';
-      ctx.globalAlpha = alpha * 0.9;
+      ctx.globalAlpha = eAlpha * 0.9;
       ctx.fillText(ln, x0, ly); ctx.fillText(ln, x0, ly);
       ctx.restore();
     }
@@ -356,12 +399,12 @@ export function drawTextClip(ctx, clip, localT, dur, W, H) {
       ctx.lineWidth = clip.outline.w * sizePx / 12;
       ctx.strokeStyle = clip.outline.color || '#000';
       ctx.lineJoin = 'round';
-      ctx.globalAlpha = alpha;
+      ctx.globalAlpha = eAlpha;
       ctx.strokeText(ln, x0, ly);
       ctx.restore();
     }
     ctx.save();
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = eAlpha;
     ctx.fillStyle = clip.color;
     ctx.fillText(ln, x0, ly);
     ctx.restore();
@@ -391,8 +434,52 @@ function drawOverlayTrack(ctx, project, track, t, W, H) {
   for (const clip of clipsSorted(track)) {
     const dur = clipDuration(clip);
     if (t < clip.start || t >= clip.start + dur) continue;
-    drawOverlayClip(ctx, clip, t - clip.start, dur, project, W, H);
+    if (clip.kind === 'ovl') drawMediaOverlay(ctx, clip, t, W, H);
+    else drawOverlayClip(ctx, clip, t - clip.start, dur, project, W, H);
   }
+}
+
+/* image/video overlay composited above the base video */
+function drawMediaOverlay(ctx, clip, t, W, H) {
+  const media = mediaMap.get(clip.mediaId);
+  if (!media) { drawMissing(ctx, W, H, 1); return; }
+  const localT = t - clip.start;
+  if (media.kind === 'video') {
+    const el = videoElSync.get(clip.id);
+    if (!el || el.readyState < 2) {
+      if (media.thumb) drawThumbnail(ctx, W, H, media.thumb, 1);
+      return;
+    }
+    drawLayer(ctx, W, H, clip, localT, t, (lx, tr) => {
+      try { lx.drawImage(el, tr.sx, tr.sy, tr.sw, tr.sh, -tr.dw / 2, -tr.dh / 2, tr.dw, tr.dh); } catch { }
+    }, geomForClip(clip, localT, t, clipIdSeed(clip)), clip.opacity ?? 1,
+      el.videoWidth || media.width || 1280, el.videoHeight || media.height || 720);
+  } else {
+    // image overlay (photo / png / gif first frame)
+    const img = ovlImage(media);
+    if (!img || !img.complete || !img.naturalWidth) return;
+    drawLayer(ctx, W, H, clip, localT, t, (lx, tr) => {
+      lx.drawImage(img, tr.sx, tr.sy, tr.sw, tr.sh, -tr.dw / 2, -tr.dh / 2, tr.dw, tr.dh);
+    }, geomForClip(clip, localT, t, clipIdSeed(clip)), clip.opacity ?? 1,
+      img.naturalWidth, img.naturalHeight);
+  }
+}
+
+const ovlImgCache = new Map();
+function ovlImage(media) {
+  let entry = ovlImgCache.get(media.id);
+  if (entry) return entry;
+  const img = new Image();
+  entry = img;
+  ovlImgCache.set(media.id, entry);
+  import('./media.js').then(async m => {
+    try {
+      const url = await m.urlReady(media);
+      img.onload = () => requestFrameRedraw();
+      img.src = url;
+    } catch { }
+  });
+  return entry;
 }
 
 export function drawOverlayClip(ctx, clip, localT, dur, project, W, H) {

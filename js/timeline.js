@@ -138,7 +138,7 @@ export class Timeline {
     if (clip.kind === 'still') label = '❄ Freeze';
     if (clip.kind === 'overlay') label = '▣ ' + (clip.sub || 'overlay');
 
-    if (clip.kind === 'video' && media && media.thumb) kids.push(el('div', { class: 'clip-thumb', style: { backgroundImage: `url(${media.thumb})` } }));
+    if ((clip.kind === 'video' || clip.kind === 'ovl') && media && media.thumb) kids.push(el('div', { class: 'clip-thumb', style: { backgroundImage: `url(${media.thumb})` } }));
     if ((clip.kind === 'audio' || (clip.kind === 'video' && media && media.hasAudio)) && media && media.peaks) {
       const cv = el('canvas', { class: 'clip-wave' });
       kids.push(cv);
@@ -148,7 +148,7 @@ export class Timeline {
     const fxCount = (clip.effects && clip.effects.length) ? el('span', { class: 'clip-fx' }, 'fx' + clip.effects.length) : null;
 
     const c = el('div', {
-      class: `tl-clip ${clip.kind}` + (clip.muted ? ' muted' : '') + (clip.id === this.selected ? ' selected' : ''),
+      class: `tl-clip ${clip.kind === 'ovl' ? 'ovl' : clip.kind}` + (clip.muted ? ' muted' : '') + (clip.id === this.selected ? ' selected' : ''),
       dataset: { clipId: clip.id },
       style: { left: (HEADER_W + clip.start * this.pxPerSec) + 'px', width: w + 'px' },
     },
@@ -262,7 +262,11 @@ export class Timeline {
       const clipId = clipNode.dataset.clipId;
       const found = findClip(this.getProject(), clipId);
       if (!found) return;
+      const now = Date.now();
+      const dbl = this._lastTap && this._lastTap.id === clipId && (now - this._lastTap.ts) < 350;
+      this._lastTap = { id: clipId, ts: now };
       this.select(clipId);
+      if (dbl && this.hooks.onClipOpen) { this.hooks.onClipOpen(clipId); return; }
       try { this.wrap.setPointerCapture(e.pointerId); } catch { }
       if (handle) {
         this._drag = {

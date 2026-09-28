@@ -153,7 +153,7 @@ async function runExport(api, { res, fps, quality, fmt }) {
     title: 'Exporting', width: 440,
     body: el('div', { class: 'stack' }, pct, bar, status),
     actions: [{
-      label: 'Cancel', kind: 'danger', onclick: () => { cancelled = true; finish(); },
+      label: 'Cancel', kind: 'danger', onclick: () => { cancelled = true; toast('Cancelling export…'); },
     }],
     onClose: () => { cancelled = true; },
   });

@@ -81,7 +81,14 @@ const app = {
       if (rec.kind === 'video') {
         editor.project.tracks.filter(x => x.kind === 'video')[0].clips.push(makeVideoClip(rec, t));
         t += Math.max(0.2, rec.duration || 3);
-      } else {
+      } else if (rec.kind === 'image') {
+        // photos become full-frame clips on the main track (move/resize in preview)
+        const { makeOverlayMediaClip } = await import('./model.js');
+        const pc = makeOverlayMediaClip(rec, t);
+        pc.contain = true;
+        vt.clips.push(pc);
+        t += clipDuration(pc);
+      } else if (rec.kind === 'audio') {
         const at = editor.project.tracks.filter(x => x.kind === 'audio').pop();
         const { makeAudioClip } = await import('./model.js');
         at.clips.push(makeAudioClip(rec, t));

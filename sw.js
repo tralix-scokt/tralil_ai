@@ -1,5 +1,5 @@
 /* TRALIX EDITOR — service worker: offline app shell */
-const CACHE = 'tralix-v2';
+const CACHE = 'tralix-v3';
 const ASSETS = [
   './',
   './index.html',
